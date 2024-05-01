@@ -55,6 +55,7 @@ def recall_at_k(predicted, actual, k):
     return true_hits / len(actual) if actual else 0
 
 
+
 predictions = [['doc1', 'doc2', 'doc3'], ['doc5', 'doc4', 'doc6']]
 actuals = [['doc3', 'doc2', 'doc1'], ['doc4', 'doc6', 'doc5']]
 scores = [ndcg(pred, act) for pred, act in zip(predictions, actuals)]

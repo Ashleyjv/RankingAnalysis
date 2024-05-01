@@ -9,6 +9,18 @@ from rank_bm25 import BM25Okapi
 import nltk
 from nltk.tokenize import word_tokenize
 nltk.download('punkt')
+import numpy as np
+import pandas as pd
+
+def clean_df(fn):
+    df = pd.read_csv(fn)
+    print (df.head(10))
+    filtered_df = df[df["content"].str.len() >= 4000]
+    filtered_df['rank'] = filtered_df.groupby(['gl', 'searchTerms']).cumcount() + 1
+    print (filtered_df.head(10))
+    filtered_df = filtered_df[['gl', 'searchTerms', 'rank', 'title', 'snippet', 'link', 'content']]
+    filtered_df.to_csv("reranked_data.csv")
+    return filtered_df
 
 def tfidf_ranking(query, documents):
     # Combine query and documents for vectorization
@@ -98,48 +110,50 @@ def vector_space_model(query, documents):
     cosine_similarities = cosine_similarity(count_matrix[0:1], count_matrix[1:])
     return cosine_similarities.flatten()
 
+def apply_ranking_algorithms(df):
+    grouped = df.groupby(['gl', 'searchTerms'])
+    results = []
 
-queries = {
-    "effects of climate change": [
-        "Climate change causes rising sea levels and increased weather variability.",
-        "Global warming and climate change: impacts on the environment."
-    ],
-    "advancements in renewable energy": [
-        "Renewable energy sources like solar and wind are becoming more cost-effective.",
-        "Wind turbines and solar panels as sustainable energy solutions."
-    ],
-    "AI in healthcare": [
-        "Artificial intelligence transforms healthcare with predictive analytics.",
-        "The role of AI in modern medicine and diagnosis."
-    ]
-}
+    for name, group in grouped:
+        gl, searchTerms = name
+        documents_content = group['content'].tolist()
+        documents_summary = group['summary'].tolist()
+        indices = group.index.tolist()
 
-df = pd.read_csv("updated_file.csv")
+        # Apply ranking algorithms to 'content'
+        tfidf_scores_content = tfidf_ranking(searchTerms, documents_content)
+        bm25_scores_content = bm25_custom(searchTerms, documents_content)
+        vsm_scores_content = vector_space_model(searchTerms, documents_content)
 
-df_sorted = df.sort_values(by=['searchTerms', 'rank'], ascending=[True, False])
+        # Apply ranking algorithms to 'summary'
+        tfidf_scores_summary = tfidf_ranking(searchTerms, documents_summary)
+        bm25_scores_summary = bm25_custom(searchTerms, documents_summary)
+        vsm_scores_summary = vector_space_model(searchTerms, documents_summary)
 
-# Group by 'query' and collect documents into lists
-query_document_mapping = df_sorted.groupby('searchTerms')['content'].apply(list).to_dict()
+        # Convert scores to ranks for 'content'
+        tfidf_ranks_content = np.argsort(tfidf_scores_content)[::-1] + 1
+        bm25_ranks_content = np.argsort(bm25_scores_content)[::-1] + 1
+        vsm_ranks_content = np.argsort(vsm_scores_content)[::-1] + 1
 
-# Optionally, retrieve ranks for evaluation purposes
-query_ranks_mapping = df_sorted.groupby('searchTerms')['rank'].apply(list).to_dict()
+        # Convert scores to ranks for 'summary'
+        tfidf_ranks_summary = np.argsort(tfidf_scores_summary)[::-1] + 1
+        bm25_ranks_summary = np.argsort(bm25_scores_summary)[::-1] + 1
+        vsm_ranks_summary = np.argsort(vsm_scores_summary)[::-1] + 1
 
-# print ("query_document_mapping", len(query_document_mapping.keys()))
-# print ("query_ranks_mapping", query_ranks_mapping)
+        # Store results with indices
+        for idx, tf_rank_c, bm_rank_c, vs_rank_c, tf_rank_s, bm_rank_s, vs_rank_s in zip(indices, tfidf_ranks_content, bm25_ranks_content, vsm_ranks_content, tfidf_ranks_summary, bm25_ranks_summary, vsm_ranks_summary):
+            results.append((idx, tf_rank_c, bm_rank_c, vs_rank_c, tf_rank_s, bm_rank_s, vs_rank_s))
 
-for row in df_sorted.iterrows():
-    searchTerm = row[1][1]
-    print (row[1][4])
-    break
+    # Convert results to DataFrame and merge
+    rank_df = pd.DataFrame(results, columns=['index', 'TFIDF_Rank_Content', 'BM25_Rank_Content', 'VSM_Rank_Content', 'TFIDF_Rank_Summary', 'BM25_Rank_Summary', 'VSM_Rank_Summary'])
+    df = df.merge(rank_df, left_index=True, right_on='index')
 
-# Applying the ranking functions to each query and its associated documents
-for query, docs in queries.items():
-    print(f"Ranking for query: '{query}'")
-    tfidf_scores = tfidf_ranking(query, docs)
-    bm25_scores = bm25_custom(query, docs)
-    vsm_scores = vector_space_model(query, docs)
-    
-    print("TF-IDF Scores:", tfidf_scores)
-    print("BM25 Scores:", bm25_scores)
-    print("Vector Space Model Scores:", vsm_scores)
-    print("\n")
+    return df
+
+
+
+fn = "summarized_ranked.csv"
+# df = clean_df(fn)
+df = pd.read_csv(fn)
+df = apply_ranking_algorithms(df)
+df.to_csv("all_ranks_with_summary.csv")
